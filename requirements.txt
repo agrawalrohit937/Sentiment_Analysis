@@ -1,27 +1,16 @@
-# Web App & Server
-flask==3.0.3
-gunicorn==22.0.0
-
-# Data Science & ML
-scikit-learn==1.5.1
-pandas==2.2.2
-numpy==1.26.4
-joblib==1.4.2
-
-# NLP Libraries
-nltk==3.8.1
-emoji==2.12.1
-spacy==3.7.5
-
-# Other ML Models
-xgboost==2.0.3
-lightgbm==4.4.0
-
-# TensorFlow (compatible with NumPy 1.26.4)
-tensorflow==2.16.1
-
-# Other Dependencies
-wordcloud==1.9.3
-matplotlib==3.9.1
-seaborn==0.13.2
-tqdm==4.66.4
+flask
+gunicorn
+scikit-learn
+pandas
+numpy
+joblib
+nltk
+emoji
+spacy
+xgboost
+lightgbm
+tensorflow
+wordcloud
+matplotlib
+seaborn
+tqdm
