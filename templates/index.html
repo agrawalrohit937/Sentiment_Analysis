@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Emotion Detector (Stacking)</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body class="min-h-screen bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 text-gray-900">
+  <div class="max-w-6xl mx-auto p-8">
+    <!-- Header -->
+    <div class="text-center mb-10 animate-fade-in">
+      <h1 class="text-5xl font-extrabold text-white drop-shadow-lg">✨ Text Emotion Detector ✨</h1>
+      <p class="text-lg text-pink-100 mt-3">Stacked Model: SVM + XGBoost + LGBM → Logistic Regression</p>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+      <!-- Input Card -->
+      <div class="bg-white/30 backdrop-blur-xl rounded-3xl shadow-2xl p-6 transform transition hover:scale-[1.02] duration-300">
+        <form method="POST" action="/predict">
+          <label for="text" class="block text-sm font-semibold text-white mb-2">Enter text</label>
+          <textarea id="text" name="text" rows="6" 
+            class="w-full border border-purple-300 rounded-2xl p-4 focus:ring-2 focus:ring-pink-400 outline-none text-gray-800"
+            placeholder="Type something...">{{ input_text or "" }}</textarea>
+          <div class="flex items-center gap-3 mt-4">
+            <button type="submit" 
+              class="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-5 py-2 rounded-2xl shadow-lg hover:scale-105 transition">
+              🚀 Predict
+            </button>
+            <button type="button" id="tryDemo" 
+              class="px-4 py-2 rounded-2xl border border-pink-300 text-pink-100 hover:bg-pink-500/40 transition">
+              🎲 Try demo
+            </button>
+          </div>
+          {% if error %}
+          <p class="text-red-200 mt-3 font-semibold">{{ error }}</p>
+          {% endif %}
+        </form>
+
+        <hr class="my-6 border-pink-200/40">
+
+        <h3 class="font-semibold text-white mb-2">📂 Batch Upload</h3>
+        <input type="file" id="fileInput" class="mb-2 text-white">
+        <button id="uploadBtn" 
+          class="px-4 py-2 rounded-2xl bg-pink-600 text-white shadow hover:bg-pink-700 transition">
+          Upload & Predict
+        </button>
+        <p id="batchMsg" class="text-sm text-white mt-2"></p>
+      </div>
+
+      <!-- Output Card -->
+      <div class="bg-white/30 backdrop-blur-xl rounded-3xl shadow-2xl p-6 animate-slide-up">
+        <h3 class="text-2xl font-bold text-white mb-4">🔮 Prediction</h3>
+        {% if pred_label %}
+          <div class="mb-3">
+            <span class="text-lg text-white">Label:</span>
+            <span class="text-2xl font-extrabold text-yellow-300 drop-shadow">{{ pred_label }}</span>
+          </div>
+          <div class="mb-5">
+            <span class="text-sm text-gray-200">Confidence:</span>
+            <span class="text-sm font-semibold text-white">{{ confidence }}</span>
+          </div>
+        {% else %}
+          <p class="text-gray-200">No prediction yet.</p>
+        {% endif %}
+
+        <canvas id="probChart" height="240"></canvas>
+
+        {% if top_terms %}
+          <h4 class="font-semibold text-white mt-6 mb-2">💡 Top influential terms</h4>
+          <ul class="list-disc list-inside text-sm text-gray-100">
+            {% for t in top_terms %}
+              <li><span class="font-mono text-yellow-200">{{ t.term }}</span> 
+                <span class="text-gray-300">({{ '%.4f'|format(t.score) }})</span>
+              </li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      </div>
+    </div>
+
+    <footer class="mt-12 text-xs text-pink-100 text-center">
+      Classes: {{ ", ".join(class_names) }}
+    </footer>
+  </div>
+
+  <script>
+    const probaData = {{ proba_json|safe if proba_json else 'null' }};
+  </script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
