@@ -1,7 +1,6 @@
 import os
 import re
 import json
-import pickle
 import datetime as dt
 from pathlib import Path
 from typing import List, Dict, Any
@@ -10,6 +9,7 @@ from flask import Flask, render_template, request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
 import pandas as pd
 import numpy as np
+import joblib
 
 from utils import clean_text, lemmatize_basic, explain_top_terms
 
@@ -29,26 +29,26 @@ ALLOWED_EXT = {"csv", "txt"}
 # ------------------------------
 # Load models
 # ------------------------------
-# with open(MODEL_DIR / "voter_models.pkl", "rb") as f:
-    # stack_model = pickle.load(f)
-import joblib
+rf = joblib.load(MODEL_DIR / "rf_model.pkl")
+xgb = joblib.load(MODEL_DIR / "xgb_model.pkl")
+lr = joblib.load(MODEL_DIR / "lr_model.pkl")
 
-with open(MODEL_DIR / "voter_models.pkl", "rb") as f:
-    stack_model = joblib.load(f)
+# lgbm may be None
+lgbm_best = None
+try:
+    lgbm_best = joblib.load(MODEL_DIR / "lgbm_model.pkl")
+except:
+    print("⚠️ LGBM model not found, continuing without it.")
 
-with open(MODEL_DIR / "tfidf_vectorizer.pkl", "rb") as f:
-    vectorizer = pickle.load(f)
+vectorizer = joblib.load(MODEL_DIR / "tfidf_vectorizer.pkl")
+label_encoder = joblib.load(MODEL_DIR / "label_encoder.pkl")
 
-with open(MODEL_DIR / "label_encoder.pkl", "rb") as f:
-    label_encoder = pickle.load(f)
-
-# Optional explainer LR (better explanations)
+# optional explainer
 LR_EXPLAINER = None
 try:
-    with open(MODEL_DIR / "logit_explainer.pkl", "rb") as f:
-        LR_EXPLAINER = pickle.load(f)
-except Exception:
-    LR_EXPLAINER = None
+    LR_EXPLAINER = joblib.load(MODEL_DIR / "logit_explainer.pkl")
+except:
+    pass
 
 CLASS_NAMES = list(label_encoder.classes_)
 
@@ -72,6 +72,21 @@ def log_predictions(rows: List[Dict[str, Any]]):
     else:
         df.to_csv(LOG_FILE, index=False)
 
+def get_ensemble_proba(X):
+    """Average probabilities from available models"""
+    probas = []
+    for model in [rf, xgb, lgbm_best, lr]:
+        if model is not None:
+            try:
+                probas.append(model.predict_proba(X))
+            except Exception:
+                preds = model.predict(X)
+                arr = np.zeros((len(X), len(CLASS_NAMES)))
+                for i, p in enumerate(preds):
+                    arr[i, p] = 1.0
+                probas.append(arr)
+    return np.mean(probas, axis=0)
+
 # ------------------------------
 # Routes
 # ------------------------------
@@ -81,21 +96,12 @@ def home():
 
 @app.route("/predict", methods=["POST"])
 def predict_form():
-    """Form submit (single text). Returns HTML-rendered result."""
     text = request.form.get("text", "").strip()
     if not text:
         return render_template("index.html", error="Please enter some text.", class_names=CLASS_NAMES)
 
     X, cleaned = preprocess_for_model([text])
-    # predict + proba
-    y_proba = None
-    try:
-        y_proba = stack_model.predict_proba(X)[0]
-    except Exception:
-        # some stacks need calibrated base models; fallback to decision_function-like
-        preds = stack_model.predict(X)
-        y_proba = np.zeros(len(CLASS_NAMES))
-        y_proba[preds[0]] = 1.0
+    y_proba = get_ensemble_proba(X)[0]
 
     y_idx = int(np.argmax(y_proba))
     label = CLASS_NAMES[y_idx]
@@ -111,7 +117,6 @@ def predict_form():
         lr_explainer=LR_EXPLAINER
     )
 
-    # log
     log_predictions([{
         "timestamp": dt.datetime.utcnow().isoformat(),
         "text": text,
@@ -119,7 +124,6 @@ def predict_form():
         "confidence": confidence
     }])
 
-    # build chart payload
     proba_payload = [{"label": CLASS_NAMES[i], "value": float(p)} for i, p in enumerate(y_proba)]
 
     return render_template(
@@ -134,20 +138,13 @@ def predict_form():
 
 @app.route("/api/predict", methods=["POST"])
 def api_predict():
-    """JSON API: { 'texts': ['...', '...'] }"""
     data = request.get_json(silent=True) or {}
     texts = data.get("texts") or []
     if not isinstance(texts, list) or len(texts) == 0:
         return jsonify({"error": "Send JSON with 'texts': [..]"}), 400
 
     X, cleaned = preprocess_for_model(texts)
-    try:
-        probs = stack_model.predict_proba(X)
-    except Exception:
-        preds = stack_model.predict(X)
-        probs = np.zeros((len(texts), len(CLASS_NAMES)))
-        for i, p in enumerate(preds):
-            probs[i, p] = 1.0
+    probs = get_ensemble_proba(X)
 
     preds_idx = probs.argmax(axis=1)
     labels = label_encoder.inverse_transform(preds_idx)
@@ -163,7 +160,6 @@ def api_predict():
             "pred_label": label,
             "confidence": conf
         })
-        # small explanation per text
         top_terms = explain_top_terms(
             text=t,
             cleaned=cleaned[i],
@@ -185,14 +181,11 @@ def api_predict():
 
 @app.route("/batch", methods=["POST"])
 def batch_upload():
-    """CSV upload with a 'text' column. Returns a downloadable CSV with predictions."""
     if "file" not in request.files:
         return jsonify({"error": "No file part"}), 400
-
     file = request.files["file"]
     if file.filename == "":
         return jsonify({"error": "No selected file"}), 400
-
     if not allowed_file(file.filename):
         return jsonify({"error": "Only csv/txt allowed"}), 400
 
@@ -200,19 +193,12 @@ def batch_upload():
     path = UPLOAD_DIR / fname
     file.save(path)
 
-    # read
     df = pd.read_csv(path) if fname.lower().endswith(".csv") else pd.read_table(path, header=None, names=["text"])
     if "text" not in df.columns:
         return jsonify({"error": "CSV must have a 'text' column"}), 400
 
     X, cleaned = preprocess_for_model(df["text"].astype(str).tolist())
-    try:
-        probs = stack_model.predict_proba(X)
-    except Exception:
-        preds = stack_model.predict(X)
-        probs = np.zeros((len(df), len(CLASS_NAMES)))
-        for i, p in enumerate(preds):
-            probs[i, p] = 1.0
+    probs = get_ensemble_proba(X)
 
     preds_idx = probs.argmax(axis=1)
     labels = label_encoder.inverse_transform(preds_idx)
@@ -222,7 +208,6 @@ def batch_upload():
     out["pred_label"] = labels
     out["confidence"] = confs
 
-    # log
     rows = [{
         "timestamp": dt.datetime.utcnow().isoformat(),
         "text": t,
@@ -241,7 +226,6 @@ def batch_upload():
 def download(filename):
     return send_from_directory(UPLOAD_DIR, filename, as_attachment=True)
 
-# Health
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"ok": True, "classes": CLASS_NAMES})
